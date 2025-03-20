@@ -1,4 +1,4 @@
-package com.isoft.commons.utils.collections;
+package com.isoft.commons.utils;
 
 import java.util.Collection;
 

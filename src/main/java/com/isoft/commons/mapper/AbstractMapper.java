@@ -28,6 +28,66 @@ public abstract class AbstractMapper<T extends Entity, S extends Model> {
         this.modelClass = modelClass;
     }
 
+    private static Object mapSingle(Object fieldValue,
+                                    Object entity,
+                                    Field entityField,
+                                    Map<Object, Object> cache)
+            throws ClassNotFoundException,
+            InvocationTargetException,
+            NoSuchMethodException,
+            InstantiationException,
+            IllegalAccessException, IOException {
+
+        //avoiding loop
+        Object entityValue = cache.get(fieldValue);
+        if (nonNull(entityValue)) {
+            if (nonNull(entityField))
+                ReflectionUtil.setField(entityField, entity, entityValue);
+            return entity;
+        }
+
+        Class<? extends Entity> entityClassFromModelClass = getEntityClassFromModelClass(fieldValue.getClass());
+        Entity newInstance = getNewInstance(entityClassFromModelClass);
+        mapFields(fieldValue, fieldValue.getClass(), newInstance, entityClassFromModelClass, cache);
+        if (nonNull(entityField))
+            ReflectionUtil.setField(entityField, entity, newInstance);
+        return newInstance;
+    }
+
+    private static void mapCollection(Object collection,
+                                      Class<? extends Model> modelGenericClass,
+                                      Object model,
+                                      Field collectionType,
+                                      Object entity,
+                                      Field entityField,
+                                      Map<Object, Object> cache)
+            throws IllegalAccessException,
+            ClassNotFoundException,
+            InvocationTargetException,
+            NoSuchMethodException,
+            InstantiationException, IOException {
+
+        //collection impl
+        Class<?> collectionImplClass = ReflectionUtil.getFieldValue(collectionType, model).getClass();
+        Collection<Entity> collectionImp = (Collection<Entity>) collectionImplClass.getDeclaredConstructor().newInstance();
+        Class<Entity> entityClassFromModelClass = (Class<Entity>) getEntityClassFromModelClass(modelGenericClass);
+
+        for (Object value : (Collection<?>) collection) {
+            Object entityValue = cache.get(value);
+            Object mapSingle = null;
+            if (isNull(entityValue)) {
+                //hence we have a collection, and we want to add elements to it, we should not set the entity field
+                mapSingle = mapSingle(value, ReflectionUtil.getNewInstance(entityClassFromModelClass), null, cache);
+            }
+            collectionImp.add(isNull(entityValue) ? (Entity) mapSingle : (Entity) entityValue);
+        }
+        ReflectionUtil.setField(entityField, entity, collectionImp);
+    }
+
+    public void mergeEntityWithModel(@NonNull S model, @NonNull T entity) {
+//        this.mapFields(entity);
+    }
+
     private static void mapFields(Object model, Class<?> modelClass, Object entity, Class<?> entityClass, Map<Object, Object> cache)
             throws IllegalAccessException,
             ClassNotFoundException,
@@ -66,64 +126,6 @@ public abstract class AbstractMapper<T extends Entity, S extends Model> {
             modelClass = modelClass.getSuperclass();
             entityClass = entityClass.getSuperclass();
         } while (modelClass != Object.class);
-    }
-
-    private static void mapSingle(Object fieldValue,
-                                  Object entity,
-                                  Field entityField,
-                                  Map<Object, Object> cache)
-            throws ClassNotFoundException,
-            InvocationTargetException,
-            NoSuchMethodException,
-            InstantiationException,
-            IllegalAccessException, IOException {
-
-        //avoiding loop
-        Object entityValue = cache.get(fieldValue);
-        if (nonNull(entityValue)) {
-            ReflectionUtil.setField(entityField, entity, entityValue);
-            return;
-        }
-
-        Class<? extends Entity> entityClassFromModelClass = getEntityClassFromModelClass(fieldValue.getClass());
-        Entity newInstance = getNewInstance(entityClassFromModelClass);
-        mapFields(fieldValue, fieldValue.getClass(), newInstance, entityClassFromModelClass, cache);
-        ReflectionUtil.setField(entityField, entity, newInstance);
-    }
-
-    private static void mapCollection(Object collection,
-                                      Class<? extends Model> modelGenericClass,
-                                      Object model,
-                                      Field collectionType,
-                                      Object entity,
-                                      Field entityField,
-                                      Map<Object, Object> cache)
-            throws IllegalAccessException,
-            ClassNotFoundException,
-            InvocationTargetException,
-            NoSuchMethodException,
-            InstantiationException, IOException {
-
-        //collection impl
-        Class<?> collectionImplClass = ReflectionUtil.getFieldValue(collectionType, model).getClass();
-        Collection<Entity> collectionImp = (Collection<Entity>) collectionImplClass.getDeclaredConstructor().newInstance();
-        Class<Entity> entityClassFromModelClass = (Class<Entity>) getEntityClassFromModelClass(modelGenericClass);
-
-        for (Object value : (Collection<?>) collection) {
-            Object entityValue = cache.get(value);
-            Entity newInstance = null;
-            if (isNull(entityValue)) {
-                newInstance = ReflectionUtil.getNewInstance(entityClassFromModelClass);
-                //hence we have a collection, and we want to add elements to it, we should not set the entity field
-                mapSingle(value, newInstance, entityField, cache);
-            }
-            collectionImp.add(isNull(entityValue) ? newInstance : (Entity) entityValue);
-        }
-        ReflectionUtil.setField(entityField, entity, collectionImp);
-    }
-
-    public void mergeEntityWithModel(@NonNull S model, @NonNull T entity) {
-//        this.mapFields(entity);
     }
 
     protected T modelToEntity(@NonNull S model) {
