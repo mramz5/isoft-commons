@@ -1,9 +1,7 @@
 package com.isoft.commons.utils;
 
-import com.isoft.commons.entity.Entity;
 import com.isoft.commons.mapper.Mapping;
 
-import java.io.*;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.ParameterizedType;
@@ -11,7 +9,7 @@ import java.lang.reflect.Type;
 import java.util.HashMap;
 import java.util.Map;
 
-public class ReflectionUtil {
+public class ReflectionUtils {
 
     private static final Map<Class<?>, Class<?>> WRAPPER_TYPE_MAP;
 
@@ -40,12 +38,6 @@ public class ReflectionUtil {
         return null;
     }
 
-    public static Class<? extends Entity> getEntityClassFromModelClass(Class<?> modelClass) throws ClassNotFoundException {
-        return (Class<? extends Entity>) Class.forName(modelClass.getName()
-                .replace("model", "entity")
-                .replace("Model", "Entity"));
-    }
-
     public static <T> T getNewInstance(Class<T> clazz) throws NoSuchMethodException, InvocationTargetException, InstantiationException, IllegalAccessException {
         return clazz.getDeclaredConstructor().newInstance();
     }
@@ -64,39 +56,4 @@ public class ReflectionUtil {
         field.setAccessible(true);
         return field.get(o);
     }
-
-    public static Object deepCopy(Object model) throws IOException, ClassNotFoundException {
-        ByteArrayOutputStream bos = new ByteArrayOutputStream();
-        ObjectOutputStream oos = new ObjectOutputStream(bos);
-        oos.writeObject(model);
-        oos.flush();
-
-        ByteArrayInputStream bis = new ByteArrayInputStream(bos.toByteArray());
-        ObjectInputStream ois = new ObjectInputStream(bis);
-        return ois.readObject();
-    }
-
-//    public static <T> boolean ifIsCycleThenSet(Field field, Object fieldValue, Object model, Object parent) throws IllegalAccessException {
-//        return fieldValue == parent;
-//        if (areTheSame)
-//            setField(field, model, fieldValue);
-//        return areTheSame;
-//    }
-
-//    @Getter
-//    @AllArgsConstructor
-//    public static class FieldMetaData<T> {
-//        private T object;
-//        private Field field;
-//        private Object fieldValue;
-//        private int fieldValueIndex;
-//
-//
-//        public FieldMetaData(T object, Field field, Object fieldValue) {
-//            this.object = object;
-//            this.field = field;
-//            this.fieldValue = fieldValue;
-//            this.fieldValueIndex = -1;
-//        }
-//    }
 }

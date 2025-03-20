@@ -1,10 +1,10 @@
 package com.isoft.commons.mapper;
 
-import com.isoft.commons.entity.Entity;
 import com.isoft.commons.model.Model;
-import com.isoft.commons.utils.ReflectionUtil;
+import com.isoft.commons.utils.ReflectionUtils;
 import lombok.Getter;
 import lombok.NonNull;
+import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
 import java.lang.reflect.Field;
@@ -13,14 +13,16 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 
-import static com.isoft.commons.utils.ReflectionUtil.*;
+import static com.isoft.commons.mapper.MapperUtils.getCorrespondingClass;
+import static com.isoft.commons.utils.ReflectionUtils.*;
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
 
 @Getter
-public abstract class AbstractMapper<T extends Entity, S extends Model> {
-
+@Slf4j
+public abstract class AbstractMapper<T, S> {
     private final Class<T> entityClass;
+
     private final Class<S> modelClass;
 
     protected AbstractMapper(Class<T> entityClass, Class<S> modelClass) {
@@ -28,125 +30,151 @@ public abstract class AbstractMapper<T extends Entity, S extends Model> {
         this.modelClass = modelClass;
     }
 
-    private static Object mapSingle(Object fieldValue,
-                                    Object entity,
-                                    Field entityField,
-                                    Map<Object, Object> cache)
+    private static void mapFields(Object source,
+                                  Class<?> sourceClass,
+                                  Object target,
+                                  Class<?> targetClass,
+                                  Map<Object, Object> cache,
+                                  boolean isEntity)
+            throws IllegalAccessException,
+            ClassNotFoundException,
+            NoSuchMethodException,
+            InstantiationException, IOException, InvocationTargetException {
+
+        cache.put(source, target);
+
+        do {
+            Field[] targetFields = targetClass.getDeclaredFields();
+            Field[] sourceFields = sourceClass.getDeclaredFields();
+
+            for (int i = 0; i < Math.min(targetFields.length, sourceFields.length); ++i) {
+                Field sourceField = sourceFields[i];
+                Field targetField = targetFields[i];
+                Object sourceFieldValue = getFieldValue(sourceField, source);
+
+                handleFieldMapping(source, target, cache, sourceField, targetField, sourceFieldValue, isEntity);
+            }
+            sourceClass = sourceClass.getSuperclass();
+            targetClass = targetClass.getSuperclass();
+        } while (sourceClass != Object.class);
+    }
+
+    private static void handleFieldMapping(Object source,
+                                           Object target,
+                                           Map<Object, Object> cache,
+                                           Field sourceField,
+                                           Field targetField,
+                                           Object sourceFieldValue,
+                                           boolean isEntity)
             throws ClassNotFoundException,
-            InvocationTargetException,
             NoSuchMethodException,
             InstantiationException,
-            IllegalAccessException, IOException {
+            IllegalAccessException,
+            IOException,
+            InvocationTargetException {
+
+        Mapping mappingAnnotation = ReflectionUtils.getMappingAnnotation(sourceField);
+        if (((nonNull(mappingAnnotation) && !mappingAnnotation.ignoreField()) || nonNull(sourceFieldValue))) {
+
+            Collection<?> collection = sourceFieldValue instanceof Collection<?> ? (Collection<?>) sourceFieldValue : null;
+            Class<?> sourceGenericClass;
+
+            if (sourceFieldValue instanceof Model)
+                mapSingle(sourceFieldValue, target, targetField, cache, isEntity);
+
+            else if (nonNull(collection) && !collection.isEmpty() &&
+                    Model.class.isAssignableFrom(sourceGenericClass = Class.forName(getCollectionParametrizedType(sourceField))))
+                mapCollection(collection, sourceGenericClass, source, sourceField, target, targetField, cache, isEntity);
+
+            else if (!ReflectionUtils.isPrimitive(sourceFieldValue.getClass())) {
+                if (sourceFieldValue.getClass().getTypeParameters().length > 1)
+                    log.warn("only collection of generics support nested map");
+
+                ReflectionUtils.setField(targetField, target, MapperUtils.deepCopy(sourceFieldValue));
+            } else
+                ReflectionUtils.setField(targetField, target, sourceFieldValue);
+        }
+    }
+
+    private static Object mapSingle(Object fieldValue,
+                                    Object target,
+                                    Field targetField,
+                                    Map<Object, Object> cache,
+                                    boolean isEntity)
+            throws ClassNotFoundException,
+            NoSuchMethodException,
+            InstantiationException,
+            IllegalAccessException,
+            IOException,
+            InvocationTargetException {
 
         //avoiding loop
-        Object entityValue = cache.get(fieldValue);
-        if (nonNull(entityValue)) {
-            if (nonNull(entityField))
-                ReflectionUtil.setField(entityField, entity, entityValue);
-            return entity;
+        Object targetValue = cache.get(fieldValue);
+        if (nonNull(targetValue)) {
+            if (nonNull(targetField))
+                ReflectionUtils.setField(targetField, target, targetValue);
+            return target;
         }
 
-        Class<? extends Entity> entityClassFromModelClass = getEntityClassFromModelClass(fieldValue.getClass());
-        Entity newInstance = getNewInstance(entityClassFromModelClass);
-        mapFields(fieldValue, fieldValue.getClass(), newInstance, entityClassFromModelClass, cache);
-        if (nonNull(entityField))
-            ReflectionUtil.setField(entityField, entity, newInstance);
+        Class<?> targetClassFromSourceClass = getCorrespondingClass(fieldValue.getClass(), isEntity);
+        Object newInstance = getNewInstance(targetClassFromSourceClass);
+        mapFields(fieldValue, fieldValue.getClass(), newInstance, targetClassFromSourceClass, cache, isEntity);
+        if (nonNull(targetField))
+            ReflectionUtils.setField(targetField, target, newInstance);
         return newInstance;
     }
 
     private static void mapCollection(Object collection,
-                                      Class<? extends Model> modelGenericClass,
-                                      Object model,
+                                      Class<?> sourceGenericClass,
+                                      Object source,
                                       Field collectionType,
-                                      Object entity,
-                                      Field entityField,
-                                      Map<Object, Object> cache)
+                                      Object target,
+                                      Field targetField,
+                                      Map<Object, Object> cache,
+                                      boolean isEntity)
             throws IllegalAccessException,
             ClassNotFoundException,
-            InvocationTargetException,
             NoSuchMethodException,
-            InstantiationException, IOException {
+            InstantiationException,
+            IOException,
+            InvocationTargetException {
 
         //collection impl
-        Class<?> collectionImplClass = ReflectionUtil.getFieldValue(collectionType, model).getClass();
-        Collection<Entity> collectionImp = (Collection<Entity>) collectionImplClass.getDeclaredConstructor().newInstance();
-        Class<Entity> entityClassFromModelClass = (Class<Entity>) getEntityClassFromModelClass(modelGenericClass);
+        Class<?> collectionImplClass = ReflectionUtils.getFieldValue(collectionType, source).getClass();
+        Collection<Object> collectionImp = (Collection<Object>) collectionImplClass.getDeclaredConstructor().newInstance();
+        Class<?> targetClassFromSourceClass = getCorrespondingClass(sourceGenericClass, isEntity);
 
         for (Object value : (Collection<?>) collection) {
-            Object entityValue = cache.get(value);
+            Object targetValue = cache.get(value);
             Object mapSingle = null;
-            if (isNull(entityValue)) {
-                //hence we have a collection, and we want to add elements to it, we should not set the entity field
-                mapSingle = mapSingle(value, ReflectionUtil.getNewInstance(entityClassFromModelClass), null, cache);
+            if (isNull(targetValue)) {
+                //hence we have a collection, and we want to add elements to it, we should not set the target field
+                mapSingle = mapSingle(value, ReflectionUtils.getNewInstance(targetClassFromSourceClass), null, cache, isEntity);
             }
-            collectionImp.add(isNull(entityValue) ? (Entity) mapSingle : (Entity) entityValue);
+            collectionImp.add(isNull(targetValue) ? mapSingle : targetValue);
         }
-        ReflectionUtil.setField(entityField, entity, collectionImp);
+        ReflectionUtils.setField(targetField, target, collectionImp);
     }
 
-    public void mergeEntityWithModel(@NonNull S model, @NonNull T entity) {
-//        this.mapFields(entity);
-    }
-
-    private static void mapFields(Object model, Class<?> modelClass, Object entity, Class<?> entityClass, Map<Object, Object> cache)
-            throws IllegalAccessException,
-            ClassNotFoundException,
-            InvocationTargetException,
-            NoSuchMethodException,
-            InstantiationException, IOException {
-
-        do {
-            Field[] entityFields = entityClass.getDeclaredFields();
-            Field[] modelsFields = modelClass.getDeclaredFields();
-
-            cache.put(model, entity);
-
-            for (int i = 0; i < Math.min(entityFields.length, modelsFields.length); ++i) {
-                Field modelField = modelsFields[i];
-                Field entityField = entityFields[i];
-                Object modelFieldValue = getFieldValue(modelField, model);
-
-                Mapping mappingAnnotation = ReflectionUtil.getMappingAnnotation(modelField);
-                if (((nonNull(mappingAnnotation) && !mappingAnnotation.ignoreField()) || nonNull(modelFieldValue))) {
-
-                    if (modelFieldValue.getClass().getTypeParameters().length > 1)
-                        throw new IllegalArgumentException("only collection of type generics are allowed");
-
-                    Class<? extends Model> modelGenericClass;
-                    if (modelFieldValue instanceof Model)
-                        mapSingle(modelFieldValue, entity, entityField, cache);
-                    else if (modelFieldValue instanceof Collection<?> && Model.class.isAssignableFrom(modelGenericClass = (Class<? extends Model>) Class.forName((getCollectionParametrizedType(modelField)))))
-                        mapCollection(modelFieldValue, modelGenericClass, model, modelField, entity, entityField, cache);
-                    else if (ReflectionUtil.isPrimitive(modelFieldValue.getClass()))
-                        ReflectionUtil.setField(entityField, entity, ReflectionUtil.deepCopy(modelFieldValue));
-                    else
-                        ReflectionUtil.setField(entityField, entity, modelFieldValue);
-                }
-            }
-            modelClass = modelClass.getSuperclass();
-            entityClass = entityClass.getSuperclass();
-        } while (modelClass != Object.class);
-    }
-
-    protected T modelToEntity(@NonNull S model) {
+    protected T toEntity(@NonNull S model) {
         T entity;
         try {
             entity = entityClass.getDeclaredConstructor().newInstance();
-            mapFields(model, modelClass, entity, entityClass, new HashMap<>());
-        } catch (IllegalAccessException | InvocationTargetException | NoSuchMethodException | InstantiationException |
-                 ClassNotFoundException | IOException var5) {
+            mapFields(model, modelClass, entity, entityClass, new HashMap<>(), true);
+        } catch (IllegalAccessException | NoSuchMethodException | InstantiationException |
+                 ClassNotFoundException | IOException | InvocationTargetException var5) {
             throw new RuntimeException(var5);
         }
         return entity;
     }
 
-    protected S entityToModel(@NonNull T entity) {
+    protected S toModel(@NonNull S entity) {
         S model;
         try {
             model = modelClass.getDeclaredConstructor().newInstance();
-            mapFields(entity, entityClass, model, model.getClass(), new HashMap<>());
-        } catch (IllegalAccessException | InvocationTargetException | NoSuchMethodException | InstantiationException |
-                 IOException | ClassNotFoundException var5) {
+            mapFields(entity, entityClass, model, modelClass, new HashMap<>(), false);
+        } catch (IllegalAccessException | NoSuchMethodException | InstantiationException | IOException |
+                 ClassNotFoundException | InvocationTargetException var5) {
             throw new RuntimeException(var5);
         }
         return model;
